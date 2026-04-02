@@ -1,10 +1,10 @@
 # ============================================================
-#  중고마켓 실시간 모니터링 프로그램  v4.5
+#  HAMON — Hot Asset Monitor  v5.0
 #  ─────────────────────────────────────────
-#  v4.5 수정:
-#    - CARD_HEIGHT 74→100 (가격 잘림 방지)
-#    - 가격 색상: C_ACCENT(핑크) → 흰색(#ffffff)
-#    - 중고나라 색상: 파란색(#6c9cff) → 네온 그린(#03c75a)
+#  v5.0 수정사항:
+#    - 이미지 라운드: PIL 마스크 제거, CTkLabel corner_radius로 통일
+#    - 카드 높이 여유: 이미지 주변에 적절한 패딩 확보
+#    - 이미지 정사각형 center-crop 유지 (빈 공간 없음)
 # ============================================================
 
 import customtkinter as ctk
@@ -44,13 +44,15 @@ FAVORITES_FILE = "favorites.json"
 SETTINGS_FILE  = "settings.json"
 CHROME_PROFILE_DIR = os.path.join(os.getcwd(), "chrome_profile")
 
+MAX_CARDS = 30
+
 C_BG           = "#111111"
 C_CARD         = "#1a1a1a"
 C_SURFACE      = "#222222"
 C_BORDER       = "#2a2a2a"
 C_TEXT         = "#e0e0e0"
 C_TEXT_DIM     = "#777777"
-C_ACCENT       = "#ff4d6d"          # 번개장터 핑크
+C_ACCENT       = "#ff4d6d"
 C_ACCENT_HOVER = "#d6385a"
 C_TAG_BG       = "#2a2a2a"
 C_TAG_TEXT     = "#cccccc"
@@ -61,9 +63,8 @@ C_YELLOW       = "#facc15"
 C_RED_DIM      = "#ef4444"
 C_GLOW_PEAK    = "#2e1620"
 
-# ★ v4.5 변경: 가격 색상 + 중고나라 색상
-C_PRICE        = "#ffffff"           # 가격: 흰색
-C_JOONGNA      = "#03c75a"           # 중고나라: 네이버 네온 그린
+C_PRICE        = "#ffffff"
+C_JOONGNA      = "#03c75a"
 
 
 # ============================================================
@@ -139,7 +140,6 @@ def format_price(price):
     s = str(price).strip()
     if not s:
         return ""
-    # "만원" 처리
     m = re.match(r'(\d+)\s*만\s*원', s)
     if m:
         p = int(m.group(1)) * 10000
@@ -314,7 +314,7 @@ class BunjangCrawler:
 
 
 # ============================================================
-#  중고나라 크롤러  (v4.4+)
+#  중고나라 크롤러
 # ============================================================
 class JoongnaCrawler:
     def __init__(self, chrome_manager):
@@ -702,11 +702,12 @@ class CardAnimator:
 # ============================================================
 class MarketMonitorApp(ctk.CTk):
 
-    CARD_IMG_SIZE = 56
-    CARD_PAD_X    = 8
-    CARD_PAD_Y    = 6
-    CARD_GAP      = 3
-    CARD_HEIGHT   = 100        # ★ v4.5: 74→100 (가격 잘림 방지)
+    # ★ v5.0: 카드 크기 설정 — 이미지 주변에 여유 확보
+    CARD_IMG_SIZE  = 66          # 이미지 66×66 정사각형
+    CARD_HEIGHT    = 90
+    CARD_PAD_X     = 6
+    CARD_PAD_Y     = 4
+    CARD_GAP       = 3
 
     def __init__(self):
         super().__init__()
@@ -748,10 +749,11 @@ class MarketMonitorApp(ctk.CTk):
         header = ctk.CTkFrame(self, fg_color=C_CARD, corner_radius=0, height=50)
         header.pack(fill="x")
         header.pack_propagate(False)
+
         ctk.CTkLabel(header, text="  HAMON",
                      font=ctk.CTkFont(size=17, weight="bold"),
                      text_color=C_TEXT).pack(side="left", padx=(12, 0), pady=10)
-        ctk.CTkLabel(header, text="Hot Asset Monitor for 번개장터 & 중고나라",
+        ctk.CTkLabel(header, text="by freeycfreeyc",
                      font=ctk.CTkFont(size=12),
                      text_color=C_TEXT_DIM).pack(side="left", padx=(6, 0), pady=(13, 10))
 
@@ -821,12 +823,14 @@ class MarketMonitorApp(ctk.CTk):
     def _build_controls(self):
         ctrl = ctk.CTkFrame(self, fg_color="transparent")
         ctrl.pack(fill="x", padx=10, pady=4)
+
         self.connect_btn = ctk.CTkButton(
-            ctrl, text="연결", width=70, height=34,
+            ctrl, text="로그인", width=80, height=34,
             fg_color=C_BTN, hover_color=C_BTN_HOVER, text_color=C_TEXT,
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._toggle_connection, corner_radius=6, border_width=0)
         self.connect_btn.pack(side="left", padx=(0, 6))
+
         self.start_btn = ctk.CTkButton(
             ctrl, text="▶  모니터링 시작", height=36,
             fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER, text_color="white",
@@ -839,6 +843,16 @@ class MarketMonitorApp(ctk.CTk):
                       command=self._clear_all_cards,
                       corner_radius=6, border_width=0).pack(side="right")
 
+        login_hint = ctk.CTkFrame(self, fg_color="transparent")
+        login_hint.pack(fill="x", padx=10, pady=(0, 2))
+        ctk.CTkLabel(
+            login_hint,
+            text="ℹ  로그인 버튼을 통해 중고나라에 로그인해야 중고나라 매물이 표시됩니다.",
+            font=ctk.CTkFont(size=11),
+            text_color=C_TEXT_DIM,
+            anchor="w"
+        ).pack(anchor="w", padx=4)
+
     def _build_results_area(self):
         container = ctk.CTkFrame(self, fg_color=C_BG, corner_radius=0)
         container.pack(fill="both", expand=True, padx=10, pady=4)
@@ -847,11 +861,7 @@ class MarketMonitorApp(ctk.CTk):
             scrollbar_button_color=C_BORDER,
             scrollbar_button_hover_color=C_TEXT_DIM)
         self.scroll_frame.pack(fill="both", expand=True)
-        self.empty_label = ctk.CTkLabel(
-            self.scroll_frame,
-            text="키워드를 추가하고 모니터링을 시작하세요",
-            font=ctk.CTkFont(size=13), text_color=C_TEXT_DIM)
-        self.empty_label.pack(pady=80)
+        self._show_empty_label()
 
     def _build_status_bar(self):
         bar = ctk.CTkFrame(self, fg_color=C_CARD, corner_radius=0, height=28)
@@ -864,23 +874,31 @@ class MarketMonitorApp(ctk.CTk):
                                            font=ctk.CTkFont(size=11), text_color=C_TEXT_DIM)
         self.chrome_status.pack(side="right", padx=10)
 
+    # ─────────────── Empty Label 관리 ───────────────
+
+    def _show_empty_label(self):
+        self._destroy_all_scroll_children()
+        lbl = ctk.CTkLabel(
+            self.scroll_frame,
+            text="키워드를 추가하고 모니터링을 시작하세요",
+            font=ctk.CTkFont(size=13), text_color=C_TEXT_DIM)
+        lbl.pack(pady=80)
+
+    def _destroy_all_scroll_children(self):
+        for widget in self.scroll_frame.winfo_children():
+            try:
+                widget.destroy()
+            except Exception:
+                pass
+
     # ─────────────── 매물 초기화 ───────────────
 
     def _clear_all_cards(self):
-        for card in self._card_widgets:
-            try:
-                card.destroy()
-            except Exception:
-                pass
         self._card_widgets.clear()
         self._card_heart_btns.clear()
         self._card_items.clear()
         self._seen_ids.clear()
-        self.empty_label = ctk.CTkLabel(
-            self.scroll_frame,
-            text="키워드를 추가하고 모니터링을 시작하세요",
-            font=ctk.CTkFont(size=13), text_color=C_TEXT_DIM)
-        self.empty_label.pack(pady=80)
+        self._show_empty_label()
         self._set_status("매물 초기화 완료")
 
     # ─────────────── Chrome 연결 ───────────────
@@ -898,31 +916,97 @@ class MarketMonitorApp(ctk.CTk):
 
     def _do_connect(self):
         try:
-            self.chrome_mgr.start_headless()
+            self.chrome_mgr.switch_to_visible()
             self.chrome_mgr.get(JOONGNA_WEB, timeout=20)
-            time.sleep(2)
-            cur_url = self.chrome_mgr.current_url().lower()
-            if "login" in cur_url:
-                self.after(0, lambda: self._set_status("로그인 필요 — 크롬 창에서 로그인하세요"))
-                self.after(0, lambda: self.chrome_status.configure(text="● 로그인 필요", text_color=C_YELLOW))
-                self.chrome_mgr.switch_to_visible()
-                self.chrome_mgr.get("https://web.joongna.com/login", timeout=20)
+            time.sleep(3)
+
+            logged_in = self._check_logged_in()
+
+            if logged_in:
+                self.after(0, lambda: self._set_status("기존 로그인 세션 확인! 백그라운드 전환 중…"))
+                self.after(0, lambda: self.chrome_status.configure(
+                    text="● 전환 중…", text_color=C_YELLOW))
+            else:
+                self.after(0, lambda: self._set_status("로그인이 필요합니다. 크롬 창에서 로그인해주세요."))
+                self.after(0, lambda: self.chrome_status.configure(
+                    text="● 로그인 대기", text_color=C_YELLOW))
+
+                try:
+                    self.chrome_mgr.get(f"{JOONGNA_WEB}/login", timeout=20)
+                except Exception:
+                    pass
+                time.sleep(2)
+
                 waited = 0
                 while waited < 120:
                     time.sleep(3)
                     waited += 3
-                    cur = self.chrome_mgr.current_url().lower()
-                    if "login" not in cur:
-                        break
-                self.after(0, lambda: self._set_status("로그인 완료, 헤드리스로 전환 중…"))
-                time.sleep(1)
-                self.chrome_mgr.switch_to_headless()
-                time.sleep(1)
+                    try:
+                        cur = self.chrome_mgr.current_url().lower()
+                        if "login" not in cur:
+                            if self._check_logged_in():
+                                break
+                    except Exception:
+                        pass
+
+                if waited >= 120 and not self._check_logged_in():
+                    self.after(0, lambda: self._set_status("로그인 시간 초과 (120초)"))
+                    self.after(0, lambda: self.chrome_status.configure(
+                        text="● 로그인 실패", text_color=C_RED_DIM))
+                    self.chrome_mgr.quit()
+                    self._chrome_ready = False
+                    self.after(0, lambda: self.connect_btn.configure(
+                        state="normal", text="로그인"))
+                    return
+
+            self.after(0, lambda: self._set_status("로그인 확인 완료! 백그라운드로 전환 중…"))
+            self.after(0, lambda: self.chrome_status.configure(
+                text="● 전환 중…", text_color=C_YELLOW))
+            time.sleep(1)
+
+            self.chrome_mgr.switch_to_headless()
+            time.sleep(1)
+
             self._chrome_ready = True
             self.after(0, self._on_connect_success)
         except Exception as e:
             self._chrome_ready = False
             self.after(0, lambda: self._on_connect_fail(str(e)))
+
+    def _check_logged_in(self):
+        try:
+            result = self.chrome_mgr.execute_script("""
+                var body = document.body ? document.body.innerText : '';
+                if (/로그아웃|마이페이지|내\\s*상점|my\\s*page/i.test(body)) {
+                    return 'logged_in';
+                }
+                var loginBtns = document.querySelectorAll('a[href*="login"], button');
+                for (var i = 0; i < loginBtns.length; i++) {
+                    var txt = (loginBtns[i].innerText || '').trim();
+                    if (txt === '로그인' || txt === 'Login') {
+                        return 'not_logged_in';
+                    }
+                }
+                var cookies = document.cookie || '';
+                if (/token|session|auth|jwt/i.test(cookies)) {
+                    return 'logged_in';
+                }
+                return 'unknown';
+            """)
+
+            if result == 'logged_in':
+                return True
+            elif result == 'not_logged_in':
+                return False
+
+            cur = self.chrome_mgr.current_url().lower()
+            if "login" in cur:
+                return False
+
+            return False
+        except Exception as e:
+            print(f"[로그인 확인 오류] {e}")
+            return False
 
     def _on_connect_success(self):
         self.connect_btn.configure(state="normal", text="연결 해제",
@@ -931,14 +1015,14 @@ class MarketMonitorApp(ctk.CTk):
         self._set_status("중고나라 연결 완료 (백그라운드)")
 
     def _on_connect_fail(self, err):
-        self.connect_btn.configure(state="normal", text="연결")
+        self.connect_btn.configure(state="normal", text="로그인")
         self.chrome_status.configure(text="● 연결 실패", text_color=C_RED_DIM)
         self._set_status(f"연결 실패: {err[:50]}")
 
     def _disconnect_chrome(self):
         self.chrome_mgr.quit()
         self._chrome_ready = False
-        self.connect_btn.configure(text="연결", fg_color=C_BTN, hover_color=C_BTN_HOVER)
+        self.connect_btn.configure(text="로그인", fg_color=C_BTN, hover_color=C_BTN_HOVER)
         self.chrome_status.configure(text="● 미연결", text_color=C_TEXT_DIM)
         self._set_status("연결 해제됨")
 
@@ -1020,15 +1104,17 @@ class MarketMonitorApp(ctk.CTk):
             self.after(0, lambda: self._set_status(f"새 상품 없음  ({now})"))
 
     # ────────────────────────────────────────────
-    #  카드 표시  (Full Repack)
+    #  카드 표시
     # ────────────────────────────────────────────
 
     def _display_new_items(self, items, animate=True):
-        try:
-            if hasattr(self, "empty_label") and self.empty_label.winfo_exists():
-                self.empty_label.destroy()
-        except Exception:
-            pass
+        existing_card_set = set(id(c) for c in self._card_widgets)
+        for child in self.scroll_frame.winfo_children():
+            if id(child) not in existing_card_set:
+                try:
+                    child.destroy()
+                except Exception:
+                    pass
 
         for card in self._card_widgets:
             try:
@@ -1042,6 +1128,18 @@ class MarketMonitorApp(ctk.CTk):
             created.append(card)
 
         self._card_widgets = created + self._card_widgets
+
+        if len(self._card_widgets) > MAX_CARDS:
+            overflow = self._card_widgets[MAX_CARDS:]
+            self._card_widgets = self._card_widgets[:MAX_CARDS]
+            for old_card in overflow:
+                cid = id(old_card)
+                self._card_heart_btns.pop(cid, None)
+                self._card_items.pop(cid, None)
+                try:
+                    old_card.destroy()
+                except Exception:
+                    pass
 
         for card in self._card_widgets:
             card.pack(fill="x", pady=(0, self.CARD_GAP), padx=2)
@@ -1060,14 +1158,16 @@ class MarketMonitorApp(ctk.CTk):
     def _create_card(self, item):
         card = ctk.CTkFrame(
             self.scroll_frame, fg_color=C_CARD,
-            corner_radius=8, height=self.CARD_HEIGHT)
+            corner_radius=10, height=self.CARD_HEIGHT)
         card.pack_propagate(False)
 
-        # ── 이미지 ──
+        # ★ v5.0: 이미지 — CTkLabel로 corner_radius 적용, 패딩으로 여유 확보
         sz = self.CARD_IMG_SIZE
-        img_label = ctk.CTkLabel(card, text="", width=sz, height=sz,
-                                  fg_color=C_SURFACE, corner_radius=6)
-        img_label.pack(side="left", padx=(self.CARD_PAD_X, 6), pady=self.CARD_PAD_Y)
+        img_label = ctk.CTkLabel(
+            card, text="", width=sz, height=sz,
+            fg_color=C_SURFACE,
+            corner_radius=0)    
+        img_label.pack(side="left", padx=(8, 0), pady=8)  # ★ 여유 패딩
 
         if item.get("image"):
             threading.Thread(target=self._load_image,
@@ -1088,21 +1188,20 @@ class MarketMonitorApp(ctk.CTk):
 
         # ── 텍스트 영역 ──
         text_frame = ctk.CTkFrame(card, fg_color="transparent")
-        text_frame.pack(side="left", fill="both", expand=True, pady=(5, 5))
+        text_frame.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=(2, 6))
 
         # 출처 + 시간
         top_row = ctk.CTkFrame(text_frame, fg_color="transparent")
         top_row.pack(anchor="w", fill="x")
 
-        # ★ v4.5: 중고나라 → 네온 그린
         source_color = C_ACCENT if item["source"] == "번개장터" else C_JOONGNA
         ctk.CTkLabel(top_row, text=item["source"],
-                     font=ctk.CTkFont(size=10, weight="bold"),
+                     font=ctk.CTkFont(size=11, weight="bold"),
                      text_color=source_color).pack(side="left")
         time_text = item.get("time", "")
         if time_text:
             ctk.CTkLabel(top_row, text=f"  ·  {time_text}",
-                         font=ctk.CTkFont(size=10),
+                         font=ctk.CTkFont(size=11),
                          text_color=C_TEXT_DIM).pack(side="left")
 
         # 제목
@@ -1110,15 +1209,15 @@ class MarketMonitorApp(ctk.CTk):
         if len(title_text) > 35:
             title_text = title_text[:35] + "…"
         ctk.CTkLabel(text_frame, text=title_text,
-                     font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=C_TEXT, anchor="w").pack(anchor="w", pady=(2, 0))
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=C_TEXT, anchor="w").pack(anchor="w", pady=(1, 0))
 
-        # ★ v4.5: 가격 — 흰색
+        # 가격
         price_text = item.get("price", "").strip()
         if price_text:
             ctk.CTkLabel(text_frame, text=price_text,
-                         font=ctk.CTkFont(size=13, weight="bold"),
-                         text_color=C_PRICE, anchor="w").pack(anchor="w", pady=(2, 0))
+                         font=ctk.CTkFont(size=14, weight="bold"),
+                         text_color=C_PRICE, anchor="w").pack(anchor="w", pady=(1, 0))
         else:
             ctk.CTkLabel(text_frame, text="가격 정보 없음",
                          font=ctk.CTkFont(size=10),
@@ -1146,7 +1245,11 @@ class MarketMonitorApp(ctk.CTk):
         for child in widget.winfo_children():
             self._bind_recursive(child, event, callback, exclude=exclude)
 
-    def _load_image(self, url, label, size=56):
+    def _load_image(self, url, label, size=66):
+        """
+        ★ v5.0: 이미지를 center-crop → 정사각형 리사이즈만 수행.
+        PIL 라운드 마스크 적용 안 함. CTkLabel의 corner_radius가 클리핑 처리.
+        """
         try:
             if url in self._image_cache:
                 photo = self._image_cache[url]
@@ -1154,15 +1257,21 @@ class MarketMonitorApp(ctk.CTk):
                 resp = requests.get(url, headers=HEADERS, timeout=8)
                 if resp.status_code != 200:
                     return
-                img = Image.open(io.BytesIO(resp.content))
+                img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+
+                # center-crop → 정사각형
+                w, h = img.size
+                short = min(w, h)
+                left = (w - short) // 2
+                top  = (h - short) // 2
+                img = img.crop((left, top, left + short, top + short))
                 img = img.resize((size, size), Image.LANCZOS)
-                mask = Image.new("L", (size, size), 0)
-                draw = ImageDraw.Draw(mask)
-                draw.rounded_rectangle([(0, 0), (size - 1, size - 1)], radius=6, fill=255)
-                output = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-                output.paste(img.convert("RGBA"), mask=mask)
-                photo = ctk.CTkImage(light_image=output, dark_image=output, size=(size, size))
+
+                # ★ PIL 라운드 마스크 제거 — CTkLabel corner_radius가 처리
+                photo = ctk.CTkImage(light_image=img, dark_image=img,
+                                     size=(size, size))
                 self._image_cache[url] = photo
+
             self.after(0, lambda: label.configure(image=photo, text=""))
         except Exception as e:
             print(f"[이미지] {e}")
@@ -1231,13 +1340,11 @@ class MarketMonitorApp(ctk.CTk):
                 row.pack(fill="x", pady=2, padx=2)
                 row.pack_propagate(False)
 
-                # ★ v4.5: 중고나라 → 네온 그린
                 source_color = C_ACCENT if item.get("source") == "번개장터" else C_JOONGNA
                 ctk.CTkLabel(row, text=item.get("source", ""),
                              font=ctk.CTkFont(size=10, weight="bold"),
                              text_color=source_color).pack(side="left", padx=(10, 6), pady=8)
 
-                # 제목 + 가격을 세로로 쌓기
                 info_frame = ctk.CTkFrame(row, fg_color="transparent")
                 info_frame.pack(side="left", fill="both", expand=True, pady=4)
 
@@ -1252,7 +1359,6 @@ class MarketMonitorApp(ctk.CTk):
                                  font=ctk.CTkFont(size=11, weight="bold"),
                                  text_color=C_PRICE, anchor="w").pack(anchor="w")
 
-                # 삭제 버튼
                 ctk.CTkButton(
                     row, text="✕", width=26, height=26,
                     fg_color="transparent", hover_color="#3a2020",
@@ -1261,7 +1367,6 @@ class MarketMonitorApp(ctk.CTk):
                     corner_radius=6, border_width=0
                 ).pack(side="right", padx=(0, 6), pady=6)
 
-                # 링크 버튼
                 ctk.CTkButton(
                     row, text="→", width=26, height=26,
                     fg_color="transparent", hover_color=C_BTN_HOVER,
@@ -1292,7 +1397,7 @@ class MarketMonitorApp(ctk.CTk):
     def _show_settings(self):
         win = ctk.CTkToplevel(self)
         win.title("설정")
-        win.geometry("340x260")
+        win.geometry("340x200")
         win.configure(fg_color=C_BG)
         win.transient(self)
         win.grab_set()
@@ -1312,24 +1417,6 @@ class MarketMonitorApp(ctk.CTk):
                      text_color=C_TEXT, border_width=1,
                      corner_radius=6).pack(fill="x", padx=12, pady=(0, 10))
 
-        chrome_frame = ctk.CTkFrame(win, fg_color=C_CARD, corner_radius=10)
-        chrome_frame.pack(fill="x", padx=16, pady=6)
-        ctk.CTkLabel(chrome_frame, text="Chrome 모드",
-                     font=ctk.CTkFont(size=12),
-                     text_color=C_TEXT_DIM).pack(anchor="w", padx=12, pady=(10, 4))
-        btn_row = ctk.CTkFrame(chrome_frame, fg_color="transparent")
-        btn_row.pack(fill="x", padx=12, pady=(0, 10))
-        ctk.CTkButton(btn_row, text="Visible 전환", width=100, height=30,
-                      fg_color=C_BTN, hover_color=C_BTN_HOVER,
-                      text_color=C_TEXT_DIM, font=ctk.CTkFont(size=11),
-                      command=self._switch_chrome_visible,
-                      corner_radius=6, border_width=0).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(btn_row, text="Headless 전환", width=100, height=30,
-                      fg_color=C_BTN, hover_color=C_BTN_HOVER,
-                      text_color=C_TEXT_DIM, font=ctk.CTkFont(size=11),
-                      command=self._switch_chrome_headless,
-                      corner_radius=6, border_width=0).pack(side="left")
-
         def save():
             try:
                 val = max(5, int(interval_var.get()))
@@ -1344,33 +1431,6 @@ class MarketMonitorApp(ctk.CTk):
                       text_color="white",
                       font=ctk.CTkFont(size=13, weight="bold"),
                       command=save, corner_radius=6, border_width=0).pack(pady=10)
-
-    def _switch_chrome_visible(self):
-        if not self._chrome_ready:
-            self._set_status("먼저 Chrome을 연결하세요")
-            return
-        self.chrome_status.configure(text="● 전환 중…", text_color=C_YELLOW)
-        def do():
-            try:
-                self.chrome_mgr.switch_to_visible()
-                self.after(0, lambda: self.chrome_status.configure(text="● Visible", text_color=C_GREEN))
-                self.after(0, lambda: self._set_status("Visible 모드"))
-            except Exception as e:
-                self.after(0, lambda: self._set_status(f"전환 실패: {e}"))
-        threading.Thread(target=do, daemon=True).start()
-
-    def _switch_chrome_headless(self):
-        if not self._chrome_ready:
-            self._set_status("먼저 Chrome을 연결하세요")
-            return
-        def do():
-            try:
-                self.chrome_mgr.switch_to_headless()
-                self.after(0, lambda: self.chrome_status.configure(text="● 연결됨", text_color=C_GREEN))
-                self.after(0, lambda: self._set_status("Headless 모드"))
-            except Exception as e:
-                self.after(0, lambda: self._set_status(f"전환 실패: {e}"))
-        threading.Thread(target=do, daemon=True).start()
 
     # ─────────────── 스피너 ───────────────
 
