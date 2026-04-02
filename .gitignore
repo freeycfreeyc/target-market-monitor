@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 가상환경
+venv/
+.venv/
+
+# PyInstaller 빌드
+build/
+dist/
+*.spec
+
+# Selenium
+chrome_profile/
+
+# 개인 데이터 (선택)
+favorites.json
+settings.json
+
+# macOS
+.DS_Store
