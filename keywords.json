@@ -1,0 +1,20 @@
+{
+  "하이랄에디션": {
+    "min": 0,
+    "max": 0,
+    "notify": true,
+    "active": true
+  },
+  "스위치 OLED 젤다": {
+    "min": 0,
+    "max": 0,
+    "notify": true,
+    "active": true
+  },
+  "XBOX 마인크래프트": {
+    "min": 0,
+    "max": 0,
+    "notify": true,
+    "active": true
+  }
+}

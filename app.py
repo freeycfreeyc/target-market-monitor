@@ -1,14 +1,15 @@
 # ============================================================
-#  HAMON — Hot Asset Monitor  v5.0
+#  HAMON — Hot Asset Monitor  v5.2
 #  ─────────────────────────────────────────
-#  v5.0 수정사항:
-#    - 이미지 라운드: PIL 마스크 제거, CTkLabel corner_radius로 통일
-#    - 카드 높이 여유: 이미지 주변에 적절한 패딩 확보
-#    - 이미지 정사각형 center-crop 유지 (빈 공간 없음)
+#  v5.2 수정사항:
+#    - 중고나라 로그인 로직 및 UI 안내 문구 원상 복구 (v5.0 기준)
+#    - 우측 하단 팝업 알림(Toast Notification) 시스템 추가
+#    - 키워드 우클릭 메뉴 확장 (알림 받기, 검색 활성화 스위치 추가)
+#    - 시스템 백그라운드 로깅 도입 (hamon_system.log)
 # ============================================================
 
 import customtkinter as ctk
-from PIL import Image, ImageTk, ImageDraw
+from PIL import Image
 import requests
 import threading
 import time
@@ -17,14 +18,24 @@ import os
 import io
 import re
 import webbrowser
-from datetime import datetime, timedelta, timezone
+import logging
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
+
+# ============================================================
+#  로깅 설정
+# ============================================================
+logging.basicConfig(
+    filename="hamon_system.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 # ============================================================
 ctk.set_appearance_mode("dark")
@@ -35,36 +46,36 @@ JOONGNA_WEB = "https://web.joongna.com"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/124.0.0.0 Safari/537.36",
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36",
     "Referer": "https://web.joongna.com/",
 }
 
 FAVORITES_FILE = "favorites.json"
-SETTINGS_FILE  = "settings.json"
+SETTINGS_FILE = "settings.json"
 CHROME_PROFILE_DIR = os.path.join(os.getcwd(), "chrome_profile")
 
 MAX_CARDS = 30
 
-C_BG           = "#111111"
-C_CARD         = "#1a1a1a"
-C_SURFACE      = "#222222"
-C_BORDER       = "#2a2a2a"
-C_TEXT         = "#e0e0e0"
-C_TEXT_DIM     = "#777777"
-C_ACCENT       = "#ff4d6d"
+C_BG = "#111111"
+C_CARD = "#1a1a1a"
+C_SURFACE = "#222222"
+C_BORDER = "#2a2a2a"
+C_TEXT = "#e0e0e0"
+C_TEXT_DIM = "#777777"
+C_ACCENT = "#ff4d6d"
 C_ACCENT_HOVER = "#d6385a"
-C_TAG_BG       = "#2a2a2a"
-C_TAG_TEXT     = "#cccccc"
-C_BTN          = "#2a2a2a"
-C_BTN_HOVER    = "#333333"
-C_GREEN        = "#4ade80"
-C_YELLOW       = "#facc15"
-C_RED_DIM      = "#ef4444"
-C_GLOW_PEAK    = "#2e1620"
+C_TAG_BG = "#2a2a2a"
+C_TAG_TEXT = "#cccccc"
+C_BTN = "#2a2a2a"
+C_BTN_HOVER = "#333333"
+C_GREEN = "#4ade80"
+C_YELLOW = "#facc15"
+C_RED_DIM = "#ef4444"
+C_GLOW_PEAK = "#2e1620"
 
-C_PRICE        = "#ffffff"
-C_JOONGNA      = "#03c75a"
+C_PRICE = "#ffffff"
+C_JOONGNA = "#03c75a"
 
 
 # ============================================================
@@ -113,9 +124,11 @@ def time_ago(ts):
             if numeric > 1e12:
                 numeric = numeric // 1000
             diff = datetime.now(timezone.utc) - datetime.fromtimestamp(
-                numeric, tz=timezone.utc)
+                numeric, tz=timezone.utc
+            )
         else:
             return ""
+
         secs = max(0, int(diff.total_seconds()))
         if secs < 60:
             return "방금 전"
@@ -134,23 +147,28 @@ def format_price(price):
         return ""
     if isinstance(price, (int, float)):
         p = int(price)
-        if p == 0:
-            return "나눔"
-        return f"{p:,}원"
+        return "나눔" if p == 0 else f"{p:,}원"
     s = str(price).strip()
     if not s:
         return ""
-    m = re.match(r'(\d+)\s*만\s*원', s)
+    m = re.match(r"(\d+)\s*만\s*원", s)
     if m:
         p = int(m.group(1)) * 10000
         return f"{p:,}원"
-    digits = re.sub(r'[^\d]', '', s)
+    digits = re.sub(r"[^\d]", "", s)
     if not digits:
         return ""
     p = int(digits)
-    if p == 0:
-        return "나눔"
-    return f"{p:,}원"
+    return "나눔" if p == 0 else f"{p:,}원"
+
+
+def parse_price_value(price_str):
+    if not price_str or price_str == "가격 정보 없음":
+        return -1
+    if price_str == "나눔":
+        return 0
+    digits = re.sub(r"[^\d]", "", price_str)
+    return int(digits) if digits else -1
 
 
 def clean_title(raw_title):
@@ -158,15 +176,17 @@ def clean_title(raw_title):
         return ""
     cleaned = raw_title.strip()
     cleaned = re.sub(
-        r'\s*(대표\s*)?이미지$|\s*사진$|\s*썸네일$|\s*image$',
-        '', cleaned, flags=re.IGNORECASE
+        r"\s*(대표\s*)?이미지$|\s*사진$|\s*썸네일$|\s*image$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
     ).strip()
     return cleaned
 
 
 def hex_to_rgb(h):
     h = h.lstrip("#")
-    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+    return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
 
 
 def rgb_to_hex(r, g, b):
@@ -176,11 +196,116 @@ def rgb_to_hex(r, g, b):
 def lerp_color(c1, c2, t):
     r1, g1, b1 = hex_to_rgb(c1)
     r2, g2, b2 = hex_to_rgb(c2)
-    return rgb_to_hex(
-        r1 + (r2 - r1) * t,
-        g1 + (g2 - g1) * t,
-        b1 + (b2 - b1) * t,
-    )
+    return rgb_to_hex(r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t)
+
+
+# ============================================================
+#  팝업 알림 (Toast Notification) 클래스
+# ============================================================
+class ToastNotification(ctk.CTkToplevel):
+    def __init__(self, parent, item, index=0):
+        super().__init__(parent)
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.configure(fg_color=C_BORDER)  # 테두리 역할
+
+        width = 280
+        height = 80
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+
+        # 우측 하단에서 위로 쌓이도록 배치
+        x = screen_w - width - 20
+        y = screen_h - height - 80 - (index * (height + 10))
+        self.geometry(f"{width}x{height}+{x}+{y}")
+
+        # 메인 컨테이너 (테두리 안쪽)
+        container = ctk.CTkFrame(self, fg_color=C_CARD, corner_radius=6)
+        container.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # 상단 바 (X 버튼 + 안내 문구)
+        top_bar = ctk.CTkFrame(container, fg_color="transparent", height=24)
+        top_bar.pack(fill="x", padx=6, pady=(4, 0))
+        top_bar.pack_propagate(False)
+
+        close_btn = ctk.CTkButton(
+            top_bar,
+            text="✕",
+            width=20,
+            height=20,
+            fg_color="transparent",
+            text_color=C_TEXT_DIM,
+            hover_color=C_RED_DIM,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self.destroy,
+            corner_radius=4,
+        )
+        close_btn.pack(side="left")
+
+        ctk.CTkLabel(
+            top_bar,
+            text="새로운 매물을 발견했습니다!",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=C_GREEN,
+        ).pack(side="left", padx=8)
+
+        # 콘텐츠 영역 (이미지 + 제목 + 가격)
+        content = ctk.CTkFrame(container, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=6, pady=2)
+
+        img_lbl = ctk.CTkLabel(
+            content, text="", width=40, height=40, fg_color=C_SURFACE, corner_radius=4
+        )
+        img_lbl.pack(side="left", padx=(0, 8))
+
+        # 이미지 비동기 로딩
+        if item.get("image"):
+            threading.Thread(
+                target=self._load_toast_image,
+                args=(item["image"], img_lbl),
+                daemon=True,
+            ).start()
+
+        text_col = ctk.CTkFrame(content, fg_color="transparent")
+        text_col.pack(side="left", fill="both", expand=True)
+
+        title = item.get("title", "")
+        if len(title) > 16:
+            title = title[:16] + "…"
+        ctk.CTkLabel(
+            text_col,
+            text=title,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=C_TEXT,
+            anchor="w",
+        ).pack(anchor="w", pady=(2, 0))
+        ctk.CTkLabel(
+            text_col,
+            text=item.get("price", ""),
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=C_PRICE,
+            anchor="w",
+        ).pack(anchor="w")
+
+        # 3초 후 자동 소멸
+        self.after(3000, self.destroy)
+
+    def _load_toast_image(self, url, label):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=5)
+            if resp.status_code == 200:
+                img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+                w, h = img.size
+                short = min(w, h)
+                l = (w - short) // 2
+                t = (h - short) // 2
+                img = img.crop((l, t, l + short, t + short)).resize(
+                    (40, 40), Image.LANCZOS
+                )
+                photo = ctk.CTkImage(light_image=img, dark_image=img, size=(40, 40))
+                self.after(0, lambda: label.configure(image=photo, text=""))
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -218,7 +343,9 @@ class ChromeManager:
         driver = webdriver.Chrome(service=service, options=opts)
         driver.execute_cdp_cmd(
             "Page.addScriptToEvaluateOnNewDocument",
-            {"source": "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"},
+            {
+                "source": "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
+            },
         )
         return driver
 
@@ -286,7 +413,7 @@ class ChromeManager:
 
 
 # ============================================================
-#  번개장터 크롤러
+#  크롤러 로직 (번개장터/중고나라)
 # ============================================================
 class BunjangCrawler:
     @staticmethod
@@ -298,24 +425,22 @@ class BunjangCrawler:
             data = resp.json()
             for item in data.get("list", []):
                 raw_price = item.get("price")
-                price_str = format_price(raw_price)
-                items.append({
-                    "id": f"bj_{item.get('pid', '')}",
-                    "title": clean_title(item.get("name", "")),
-                    "price": price_str,
-                    "image": item.get("product_image", ""),
-                    "time": time_ago(item.get("update_time", "")),
-                    "url": f"https://m.bunjang.co.kr/products/{item.get('pid', '')}",
-                    "source": "번개장터",
-                })
+                items.append(
+                    {
+                        "id": f"bj_{item.get('pid', '')}",
+                        "title": clean_title(item.get("name", "")),
+                        "price": format_price(raw_price),
+                        "image": item.get("product_image", ""),
+                        "time": time_ago(item.get("update_time", "")),
+                        "url": f"https://m.bunjang.co.kr/products/{item.get('pid', '')}",
+                        "source": "번개장터",
+                    }
+                )
         except Exception as e:
-            print(f"[번개장터 오류] {e}")
+            logging.error(f"[번개장터 오류] {e}")
         return items
 
 
-# ============================================================
-#  중고나라 크롤러
-# ============================================================
 class JoongnaCrawler:
     def __init__(self, chrome_manager):
         self.cm = chrome_manager
@@ -329,24 +454,19 @@ class JoongnaCrawler:
 
             items = self._parse_next_data(limit)
             if items:
-                print(f"[중고나라] __NEXT_DATA__ 파싱 성공: {len(items)}건")
                 return items
 
             items = self._parse_via_js(limit)
             if items:
-                print(f"[중고나라] JS __NEXT_DATA__ 파싱 성공: {len(items)}건")
                 return items
 
             items = self._parse_via_dom_js(limit)
             if items:
-                print(f"[중고나라] DOM JS 파싱 성공: {len(items)}건")
                 return items
 
             items = self._parse_dom_regex(limit)
-            if items:
-                print(f"[중고나라] DOM Regex 파싱 성공: {len(items)}건")
         except Exception as e:
-            print(f"[중고나라 오류] {e}")
+            logging.error(f"[중고나라 오류] {e}")
         return items
 
     def _extract_item(self, p):
@@ -358,8 +478,16 @@ class JoongnaCrawler:
                 break
 
         price = ""
-        for key in ("price", "productPrice", "salePrice", "wishPrice",
-                     "sellPrice", "amount", "payPrice", "displayPrice"):
+        for key in (
+            "price",
+            "productPrice",
+            "salePrice",
+            "wishPrice",
+            "sellPrice",
+            "amount",
+            "payPrice",
+            "displayPrice",
+        ):
             val = p.get(key)
             if val is not None:
                 formatted = format_price(val)
@@ -381,30 +509,63 @@ class JoongnaCrawler:
                         break
 
         img = ""
-        for key in ("imageUrl", "image", "imageURL", "thumbnailUrl",
-                     "thumbnail", "mainImage", "photo", "photoUrl",
-                     "imageUri", "mainImageUrl", "thumbImageUrl"):
+        for key in (
+            "imageUrl",
+            "image",
+            "imageURL",
+            "thumbnailUrl",
+            "thumbnail",
+            "mainImage",
+            "photo",
+            "photoUrl",
+            "imageUri",
+            "mainImageUrl",
+            "thumbImageUrl",
+        ):
             val = p.get(key)
-            if val and isinstance(val, str) and (val.startswith("http") or val.startswith("//")):
+            if (
+                val
+                and isinstance(val, str)
+                and (val.startswith("http") or val.startswith("//"))
+            ):
                 img = val
                 break
         if not img:
-            for key in ("imageUrls", "images", "photos", "thumbnails", "imageList", "productImages"):
+            for key in (
+                "imageUrls",
+                "images",
+                "photos",
+                "thumbnails",
+                "imageList",
+                "productImages",
+            ):
                 val = p.get(key)
                 if val and isinstance(val, list) and len(val) > 0:
                     first = val[0]
                     if isinstance(first, str):
                         img = first
                     elif isinstance(first, dict):
-                        img = first.get("url", first.get("imageUrl", first.get("uri", "")))
+                        img = first.get(
+                            "url", first.get("imageUrl", first.get("uri", ""))
+                        )
                     break
         if img and not img.startswith("http"):
             img = ("https:" + img) if img.startswith("//") else ""
 
         time_raw = ""
-        for key in ("sortDate", "updatedAt", "regDate", "createdAt",
-                     "registeredAt", "modifiedAt", "updateTime",
-                     "regDatetime", "modDate", "postedAt", "insertDt"):
+        for key in (
+            "sortDate",
+            "updatedAt",
+            "regDate",
+            "createdAt",
+            "registeredAt",
+            "modifiedAt",
+            "updateTime",
+            "regDatetime",
+            "modDate",
+            "postedAt",
+            "insertDt",
+        ):
             val = p.get(key)
             if val:
                 time_raw = val
@@ -431,7 +592,9 @@ class JoongnaCrawler:
         items = []
         try:
             src = self.cm.page_source()
-            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', src, re.DOTALL)
+            m = re.search(
+                r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', src, re.DOTALL
+            )
             if not m:
                 return []
             nd = json.loads(m.group(1))
@@ -440,15 +603,16 @@ class JoongnaCrawler:
                 item = self._extract_item(p)
                 if item["id"] and item["title"]:
                     items.append(item)
-        except Exception as e:
-            print(f"[__NEXT_DATA__] {e}")
+        except Exception:
+            pass
         return items
 
     def _parse_via_js(self, limit):
         items = []
         try:
             data = self.cm.execute_script(
-                "try{return JSON.parse(document.querySelector('#__NEXT_DATA__')?.textContent||'{}')}catch(e){return {}}")
+                "try{return JSON.parse(document.querySelector('#__NEXT_DATA__')?.textContent||'{}')}catch(e){return {}}"
+            )
             if not data or not isinstance(data, dict):
                 return []
             products = self._find_products(data)
@@ -456,132 +620,77 @@ class JoongnaCrawler:
                 item = self._extract_item(p)
                 if item["id"] and item["title"]:
                     items.append(item)
-        except Exception as e:
-            print(f"[JS __NEXT_DATA__] {e}")
+        except Exception:
+            pass
         return items
 
     def _parse_via_dom_js(self, limit):
         items = []
         try:
-            script = """
+            script = (
+                """
             var results = [];
             var links = document.querySelectorAll('a[href*="/product/"]');
-            
             links.forEach(function(a) {
                 var href = a.getAttribute('href') || '';
                 var match = href.match(/\\/product\\/(\\d+)/);
                 if (!match) return;
                 var pid = match[1];
-                
                 var imgEl = a.querySelector('img');
                 var imgUrl = imgEl ? (imgEl.getAttribute('src') || '') : '';
-                
                 var allText = a.innerText || a.textContent || '';
-                var lines = allText.split('\\n').map(function(s){ return s.trim(); })
-                                   .filter(function(s){ return s.length > 0; });
-                
-                var title = '';
-                var price = '';
-                var timeStr = '';
-                
+                var lines = allText.split('\\n').map(function(s){ return s.trim(); }).filter(function(s){ return s.length > 0; });
+                var title = ''; var price = ''; var timeStr = '';
                 for (var i = 0; i < lines.length; i++) {
                     var line = lines[i];
-                    
                     if (!price) {
-                        if (/[\\d,]+\\s*원/.test(line)) {
-                            price = line;
-                            continue;
-                        }
-                        if (/\\d+\\s*만\\s*원/.test(line)) {
-                            price = line;
-                            continue;
-                        }
-                        if (/^[\\d,]+$/.test(line) && line.length >= 3 && parseInt(line.replace(/,/g,'')) > 0) {
-                            price = line + '원';
-                            continue;
-                        }
-                        if (/무료|나눔/.test(line)) {
-                            price = '나눔';
-                            continue;
-                        }
+                        if (/[\\d,]+\\s*원/.test(line) || /\\d+\\s*만\\s*원/.test(line)) { price = line; continue; }
+                        if (/^[\\d,]+$/.test(line) && line.length >= 3 && parseInt(line.replace(/,/g,'')) > 0) { price = line + '원'; continue; }
+                        if (/무료|나눔/.test(line)) { price = '나눔'; continue; }
                     }
-                    
-                    if (!timeStr && /(전|방금|초 전|분 전|시간 전|일 전)/.test(line) && line.length < 20) {
-                        timeStr = line;
-                        continue;
-                    }
-                    
-                    if (!title && line.length >= 2 
-                        && !/^(판매중|예약중|거래완료|광고|AD|NEW|N)$/i.test(line)
-                        && !/^[\\d,]+$/.test(line)) {
-                        title = line;
-                        continue;
-                    }
+                    if (!timeStr && /(전|방금|초 전|분 전|시간 전|일 전)/.test(line) && line.length < 20) { timeStr = line; continue; }
+                    if (!title && line.length >= 2 && !/^(판매중|예약중|거래완료|광고|AD|NEW|N)$/i.test(line) && !/^[\\d,]+$/.test(line)) { title = line; continue; }
                 }
-                
-                if (!price) {
-                    var allSpans = a.querySelectorAll('span, p, div, em, strong');
-                    for (var j = 0; j < allSpans.length; j++) {
-                        var st = (allSpans[j].innerText || allSpans[j].textContent || '').trim();
-                        if (/[\\d,]+\\s*원/.test(st) && st.length < 30) {
-                            price = st.match(/[\\d,]+\\s*원/)[0];
-                            break;
-                        }
-                        if (/^[\\d,]+$/.test(st) && st.length >= 3) {
-                            var num = parseInt(st.replace(/,/g,''));
-                            if (num > 0) {
-                                price = num.toLocaleString() + '원';
-                                break;
-                            }
-                        }
-                    }
-                }
-                
-                if (pid && title) {
-                    results.push({
-                        id: pid,
-                        title: title,
-                        price: price || '',
-                        time: timeStr || '',
-                        image: imgUrl
-                    });
-                }
+                if (pid && title) results.push({ id: pid, title: title, price: price || '', time: timeStr || '', image: imgUrl });
             });
-            return results.slice(0, """ + str(limit) + """);
+            return results.slice(0, """
+                + str(limit)
+                + """);
             """
+            )
             raw = self.cm.execute_script(script)
             if not raw or not isinstance(raw, list):
                 return []
-
             for r in raw:
                 pid = str(r.get("id", ""))
                 title = clean_title(r.get("title", ""))
                 raw_price = r.get("price", "")
-                price = format_price(raw_price) if raw_price else ""
                 img = r.get("image", "")
                 if img and not img.startswith("http"):
                     img = ("https:" + img) if img.startswith("//") else ""
-                time_str = r.get("time", "")
-
                 if pid and title:
-                    items.append({
-                        "id": f"jn_{pid}",
-                        "title": title,
-                        "price": price,
-                        "image": img,
-                        "time": time_str,
-                        "url": f"{JOONGNA_WEB}/product/{pid}",
-                        "source": "중고나라",
-                    })
-        except Exception as e:
-            print(f"[DOM JS] {e}")
+                    items.append(
+                        {
+                            "id": f"jn_{pid}",
+                            "title": title,
+                            "price": format_price(raw_price) if raw_price else "",
+                            "image": img,
+                            "time": r.get("time", ""),
+                            "url": f"{JOONGNA_WEB}/product/{pid}",
+                            "source": "중고나라",
+                        }
+                    )
+        except Exception:
+            pass
         return items
 
     def _parse_dom_regex(self, limit):
         items = []
         try:
             src = self.cm.page_source()
-            pat = re.compile(r'<a[^>]*href="(/product/(\d+))"[^>]*>(.*?)</a>', re.DOTALL)
+            pat = re.compile(
+                r'<a[^>]*href="(/product/(\d+))"[^>]*>(.*?)</a>', re.DOTALL
+            )
             for m in pat.finditer(src):
                 if len(items) >= limit:
                     break
@@ -592,33 +701,29 @@ class JoongnaCrawler:
                 if am:
                     title = clean_title(am.group(1))
                 if not title:
-                    tm = re.search(r'>([^<]{2,})<', html)
+                    tm = re.search(r">([^<]{2,})<", html)
                     if tm:
                         title = clean_title(tm.group(1).strip())
-                img = ""
                 im = re.search(r'src="(https?://[^"]+)"', html)
-                if im:
-                    img = im.group(1)
-                price = ""
-                pm = re.search(r'([\d,]+)\s*원', html)
-                if pm:
-                    price = format_price(pm.group(1))
-                time_str = ""
-                tm2 = re.search(r'(\d+\s*(?:초|분|시간|일)\s*전|방금\s*전)', html)
-                if tm2:
-                    time_str = tm2.group(1)
+                img = im.group(1) if im else ""
+                pm = re.search(r"([\d,]+)\s*원", html)
+                price = format_price(pm.group(1)) if pm else ""
+                tm2 = re.search(r"(\d+\s*(?:초|분|시간|일)\s*전|방금\s*전)", html)
+                time_str = tm2.group(1) if tm2 else ""
                 if pid and title:
-                    items.append({
-                        "id": f"jn_{pid}",
-                        "title": title,
-                        "price": price,
-                        "image": img,
-                        "time": time_str,
-                        "url": f"{JOONGNA_WEB}/product/{pid}",
-                        "source": "중고나라",
-                    })
-        except Exception as e:
-            print(f"[DOM Regex] {e}")
+                    items.append(
+                        {
+                            "id": f"jn_{pid}",
+                            "title": title,
+                            "price": price,
+                            "image": img,
+                            "time": time_str,
+                            "url": f"{JOONGNA_WEB}/product/{pid}",
+                            "source": "중고나라",
+                        }
+                    )
+        except Exception:
+            pass
         return items
 
     @staticmethod
@@ -628,23 +733,43 @@ class JoongnaCrawler:
         if isinstance(obj, list) and len(obj) > 0:
             first = obj[0] if isinstance(obj[0], dict) else None
             if first:
-                title_keys = ("title", "name", "productTitle", "subject", "productName")
-                id_keys = ("seq", "productSeq", "id", "pid", "productId", "productNo", "num")
-                price_keys = ("price", "productPrice", "salePrice", "wishPrice", "sellPrice", "amount")
-                img_keys = ("imageUrl", "image", "thumbnailUrl", "thumbnail", "mainImage")
-                has_t = any(k in first for k in title_keys)
-                has_i = any(k in first for k in id_keys)
-                has_p = any(k in first for k in price_keys)
-                has_img = any(k in first for k in img_keys)
-                if has_t and has_i:
+                t_keys = ("title", "name", "productTitle", "subject", "productName")
+                i_keys = (
+                    "seq",
+                    "productSeq",
+                    "id",
+                    "pid",
+                    "productId",
+                    "productNo",
+                    "num",
+                )
+                p_keys = (
+                    "price",
+                    "productPrice",
+                    "salePrice",
+                    "wishPrice",
+                    "sellPrice",
+                    "amount",
+                )
+                if any(k in first for k in t_keys) and any(k in first for k in i_keys):
                     return obj
-                if has_i and (has_p or has_img):
+                if any(k in first for k in i_keys) and any(k in first for k in p_keys):
                     return obj
         if isinstance(obj, dict):
-            priority = ("data", "items", "list", "products", "result",
-                        "content", "pageProps", "dehydratedState",
-                        "queries", "state", "searchList", "productList",
-                        "searchProducts", "searchResult", "results")
+            priority = (
+                "data",
+                "items",
+                "list",
+                "products",
+                "result",
+                "content",
+                "pageProps",
+                "dehydratedState",
+                "queries",
+                "state",
+                "searchList",
+                "productList",
+            )
             for key in priority:
                 if key in obj:
                     r = JoongnaCrawler._find_products(obj[key], _depth + 1)
@@ -668,7 +793,7 @@ class JoongnaCrawler:
 # ============================================================
 class CardAnimator:
     GLOW_DURATION_MS = 900
-    GLOW_STEPS       = 20
+    GLOW_STEPS = 20
 
     @staticmethod
     def glow(app, card):
@@ -689,6 +814,7 @@ class CardAnimator:
             except Exception:
                 return
             app.after(delay, lambda: step(i + 1))
+
         step(0)
 
     @staticmethod
@@ -701,39 +827,56 @@ class CardAnimator:
 #  메인 앱
 # ============================================================
 class MarketMonitorApp(ctk.CTk):
-
-    # ★ v5.0: 카드 크기 설정 — 이미지 주변에 여유 확보
-    CARD_IMG_SIZE  = 66          # 이미지 66×66 정사각형
-    CARD_HEIGHT    = 90
-    CARD_PAD_X     = 6
-    CARD_PAD_Y     = 4
-    CARD_GAP       = 3
+    CARD_IMG_SIZE = 66
+    CARD_HEIGHT = 90
+    CARD_PAD_X = 6
+    CARD_PAD_Y = 4
+    CARD_GAP = 3
 
     def __init__(self):
         super().__init__()
-        self.title("HAMON")
+        self.title("HAMON v5.2")
         self.geometry("500x800")
         self.minsize(460, 650)
         self.configure(fg_color=C_BG)
 
-        self.keywords   = []
-        self.favorites  = load_json(FAVORITES_FILE, [])
-        self.settings   = load_json(SETTINGS_FILE, {"interval": 30})
+        # 기존 리스트 구조의 설정을 딕셔너리로 마이그레이션 및 로드
+        loaded_kw = load_json("keywords.json", {})
+        if isinstance(loaded_kw, list):
+            self.keywords = {
+                k: {"min": 0, "max": 0, "notify": True, "active": True}
+                for k in loaded_kw
+            }
+        else:
+            self.keywords = {}
+            for k, v in loaded_kw.items():
+                self.keywords[k] = {
+                    "min": v.get("min", 0),
+                    "max": v.get("max", 0),
+                    "notify": v.get("notify", True),
+                    "active": v.get("active", True),
+                }
+
+        self.exclude_keywords = load_json("excludes.json", [])
+        self.favorites = load_json(FAVORITES_FILE, [])
+        self.settings = load_json(SETTINGS_FILE, {"interval": 30})
         self.monitoring = False
 
-        self._monitor_thread  = None
-        self._seen_ids        = set()
-        self._image_cache     = {}
-        self._card_widgets    = []
+        self._monitor_thread = None
+        self._seen_ids = set()
+        self._image_cache = {}
+        self._card_widgets = []
         self._card_heart_btns = {}
-        self._card_items      = {}
-        self._spinner_running = False
-        self._spinner_idx     = 0
-        self._spinner_chars   = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+        self._card_items = {}
+        self._active_toasts = []  # 활성화된 Toast 관리
 
-        self.chrome_mgr       = ChromeManager(CHROME_PROFILE_DIR)
-        self.joongna_crawler  = JoongnaCrawler(self.chrome_mgr)
-        self._chrome_ready    = False
+        self._spinner_running = False
+        self._spinner_idx = 0
+        self._spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+        self.chrome_mgr = ChromeManager(CHROME_PROFILE_DIR)
+        self.joongna_crawler = JoongnaCrawler(self.chrome_mgr)
+        self._chrome_ready = False
 
         self._build_header()
         self._build_keyword_area()
@@ -742,107 +885,172 @@ class MarketMonitorApp(ctk.CTk):
         self._build_status_bar()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._refresh_tags()
+        logging.info("HAMON 앱 시작")
 
     # ─────────────── UI 빌드 ───────────────
-
     def _build_header(self):
         header = ctk.CTkFrame(self, fg_color=C_CARD, corner_radius=0, height=50)
         header.pack(fill="x")
         header.pack_propagate(False)
 
-        ctk.CTkLabel(header, text="  HAMON",
-                     font=ctk.CTkFont(size=17, weight="bold"),
-                     text_color=C_TEXT).pack(side="left", padx=(12, 0), pady=10)
-        ctk.CTkLabel(header, text="by freeycfreeyc",
-                     font=ctk.CTkFont(size=12),
-                     text_color=C_TEXT_DIM).pack(side="left", padx=(6, 0), pady=(13, 10))
+        ctk.CTkLabel(
+            header,
+            text="  HAMON",
+            font=ctk.CTkFont(size=17, weight="bold"),
+            text_color=C_TEXT,
+        ).pack(side="left", padx=(12, 0), pady=10)
+        ctk.CTkLabel(
+            header,
+            text="by freeycfreeyc",
+            font=ctk.CTkFont(size=12),
+            text_color=C_TEXT_DIM,
+        ).pack(side="left", padx=(6, 0), pady=(13, 10))
 
         self.fav_btn = ctk.CTkButton(
-            header, text="♥ 즐겨찾기", width=80, height=30,
-            fg_color=C_BTN, hover_color=C_BTN_HOVER,
-            text_color=C_TEXT_DIM, font=ctk.CTkFont(size=12),
-            command=self._show_favorites, corner_radius=6, border_width=0)
+            header,
+            text="♥ 즐겨찾기",
+            width=80,
+            height=30,
+            fg_color=C_BTN,
+            hover_color=C_BTN_HOVER,
+            text_color=C_TEXT_DIM,
+            font=ctk.CTkFont(size=12),
+            command=self._show_favorites,
+            corner_radius=6,
+            border_width=0,
+        )
         self.fav_btn.pack(side="right", padx=8)
-        ctk.CTkButton(header, text="⚙", width=30, height=30,
-                      fg_color=C_BTN, hover_color=C_BTN_HOVER,
-                      text_color=C_TEXT_DIM, font=ctk.CTkFont(size=15),
-                      command=self._show_settings,
-                      corner_radius=6, border_width=0).pack(side="right", padx=(0, 2))
+        ctk.CTkButton(
+            header,
+            text="⚙",
+            width=30,
+            height=30,
+            fg_color=C_BTN,
+            hover_color=C_BTN_HOVER,
+            text_color=C_TEXT_DIM,
+            font=ctk.CTkFont(size=15),
+            command=self._show_settings,
+            corner_radius=6,
+            border_width=0,
+        ).pack(side="right", padx=(0, 2))
 
     def _build_keyword_area(self):
         kw_frame = ctk.CTkFrame(self, fg_color=C_CARD, corner_radius=10)
         kw_frame.pack(fill="x", padx=10, pady=(8, 4))
-        ctk.CTkLabel(kw_frame, text="검색 키워드",
-                     font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=C_TEXT_DIM).pack(anchor="w", padx=12, pady=(10, 4))
+
+        lbl_frame = ctk.CTkFrame(kw_frame, fg_color="transparent")
+        lbl_frame.pack(fill="x", padx=12, pady=(10, 4))
+        ctk.CTkLabel(
+            lbl_frame,
+            text="검색 키워드",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=C_TEXT_DIM,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            lbl_frame,
+            text="ℹ 검색 태그 우클릭: 상세 설정",
+            font=ctk.CTkFont(size=11),
+            text_color=C_TEXT_DIM,
+        ).pack(side="right")
+
         input_row = ctk.CTkFrame(kw_frame, fg_color="transparent")
         input_row.pack(fill="x", padx=10, pady=(0, 4))
+
+        self.mode_var = ctk.StringVar(value="search")
+        self.mode_switch = ctk.CTkSwitch(
+            input_row,
+            text="제외",
+            variable=self.mode_var,
+            onvalue="exclude",
+            offvalue="search",
+            button_color=C_TEXT,
+            button_hover_color=C_PRICE,
+            progress_color=C_RED_DIM,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=C_TEXT_DIM,
+            width=50,
+        )
+        self.mode_switch.pack(side="left", padx=(0, 8))
+
         self.kw_entry = ctk.CTkEntry(
-            input_row, placeholder_text="키워드 입력 후 Enter",
-            height=34, fg_color=C_SURFACE, border_color=C_BORDER,
-            text_color=C_TEXT, font=ctk.CTkFont(size=13),
-            border_width=1, corner_radius=6)
+            input_row,
+            placeholder_text="키워드 입력 후 Enter",
+            height=34,
+            fg_color=C_SURFACE,
+            border_color=C_BORDER,
+            text_color=C_TEXT,
+            font=ctk.CTkFont(size=13),
+            border_width=1,
+            corner_radius=6,
+        )
         self.kw_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
         self.kw_entry.bind("<Return>", lambda e: self._add_keyword())
-        ctk.CTkButton(input_row, text="추가", width=50, height=34,
-                      fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER,
-                      text_color="white",
-                      font=ctk.CTkFont(size=12, weight="bold"),
-                      command=self._add_keyword,
-                      corner_radius=6, border_width=0).pack(side="right")
+
+        ctk.CTkButton(
+            input_row,
+            text="추가",
+            width=50,
+            height=34,
+            fg_color=C_ACCENT,
+            hover_color=C_ACCENT_HOVER,
+            text_color="white",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._add_keyword,
+            corner_radius=6,
+            border_width=0,
+        ).pack(side="right")
+
         self.tag_frame = ctk.CTkFrame(kw_frame, fg_color="transparent")
         self.tag_frame.pack(fill="x", padx=10, pady=(0, 8))
-
-    def _add_keyword(self):
-        kw = self.kw_entry.get().strip()
-        if not kw or kw in self.keywords:
-            return
-        self.keywords.append(kw)
-        self.kw_entry.delete(0, "end")
-        self._refresh_tags()
-
-    def _remove_keyword(self, kw):
-        if kw in self.keywords:
-            self.keywords.remove(kw)
-        self._refresh_tags()
-
-    def _refresh_tags(self):
-        for w in self.tag_frame.winfo_children():
-            w.destroy()
-        for kw in self.keywords:
-            tag = ctk.CTkFrame(self.tag_frame, fg_color=C_TAG_BG, corner_radius=14)
-            tag.pack(side="left", padx=3, pady=3)
-            ctk.CTkLabel(tag, text=f" {kw} ", text_color=C_TAG_TEXT,
-                         font=ctk.CTkFont(size=12)).pack(side="left", padx=(8, 0), pady=3)
-            ctk.CTkButton(tag, text="✕", width=22, height=22,
-                          fg_color="transparent", hover_color="#444444",
-                          text_color=C_TEXT_DIM, font=ctk.CTkFont(size=10),
-                          command=lambda k=kw: self._remove_keyword(k),
-                          corner_radius=11, border_width=0).pack(side="right", padx=(0, 4), pady=3)
 
     def _build_controls(self):
         ctrl = ctk.CTkFrame(self, fg_color="transparent")
         ctrl.pack(fill="x", padx=10, pady=4)
 
         self.connect_btn = ctk.CTkButton(
-            ctrl, text="로그인", width=80, height=34,
-            fg_color=C_BTN, hover_color=C_BTN_HOVER, text_color=C_TEXT,
+            ctrl,
+            text="로그인",
+            width=80,
+            height=34,
+            fg_color=C_BTN,
+            hover_color=C_BTN_HOVER,
+            text_color=C_TEXT,
             font=ctk.CTkFont(size=12, weight="bold"),
-            command=self._toggle_connection, corner_radius=6, border_width=0)
+            command=self._toggle_connection,
+            corner_radius=6,
+            border_width=0,
+        )
         self.connect_btn.pack(side="left", padx=(0, 6))
 
         self.start_btn = ctk.CTkButton(
-            ctrl, text="▶  모니터링 시작", height=36,
-            fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER, text_color="white",
+            ctrl,
+            text="▶  모니터링 시작",
+            height=36,
+            fg_color=C_ACCENT,
+            hover_color=C_ACCENT_HOVER,
+            text_color="white",
             font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._toggle_monitoring, corner_radius=6, border_width=0)
+            command=self._toggle_monitoring,
+            corner_radius=6,
+            border_width=0,
+        )
         self.start_btn.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        ctk.CTkButton(ctrl, text="🗑", width=36, height=36,
-                      fg_color=C_BTN, hover_color=C_BTN_HOVER,
-                      text_color=C_TEXT_DIM, font=ctk.CTkFont(size=14),
-                      command=self._clear_all_cards,
-                      corner_radius=6, border_width=0).pack(side="right")
+        ctk.CTkButton(
+            ctrl,
+            text="🗑",
+            width=36,
+            height=36,
+            fg_color=C_BTN,
+            hover_color=C_BTN_HOVER,
+            text_color=C_TEXT_DIM,
+            font=ctk.CTkFont(size=14),
+            command=self._clear_all_cards,
+            corner_radius=6,
+            border_width=0,
+        ).pack(side="right")
 
+        # ★ v5.0의 로그인 안내 문구 복구
         login_hint = ctk.CTkFrame(self, fg_color="transparent")
         login_hint.pack(fill="x", padx=10, pady=(0, 2))
         ctk.CTkLabel(
@@ -850,16 +1058,18 @@ class MarketMonitorApp(ctk.CTk):
             text="ℹ  로그인 버튼을 통해 중고나라에 로그인해야 중고나라 매물이 표시됩니다.",
             font=ctk.CTkFont(size=11),
             text_color=C_TEXT_DIM,
-            anchor="w"
+            anchor="w",
         ).pack(anchor="w", padx=4)
 
     def _build_results_area(self):
         container = ctk.CTkFrame(self, fg_color=C_BG, corner_radius=0)
         container.pack(fill="both", expand=True, padx=10, pady=4)
         self.scroll_frame = ctk.CTkScrollableFrame(
-            container, fg_color=C_BG,
+            container,
+            fg_color=C_BG,
             scrollbar_button_color=C_BORDER,
-            scrollbar_button_hover_color=C_TEXT_DIM)
+            scrollbar_button_hover_color=C_TEXT_DIM,
+        )
         self.scroll_frame.pack(fill="both", expand=True)
         self._show_empty_label()
 
@@ -867,31 +1077,217 @@ class MarketMonitorApp(ctk.CTk):
         bar = ctk.CTkFrame(self, fg_color=C_CARD, corner_radius=0, height=28)
         bar.pack(fill="x", side="bottom")
         bar.pack_propagate(False)
-        self.status_label = ctk.CTkLabel(bar, text="대기 중",
-                                          font=ctk.CTkFont(size=11), text_color=C_TEXT_DIM)
+        self.status_label = ctk.CTkLabel(
+            bar, text="대기 중", font=ctk.CTkFont(size=11), text_color=C_TEXT_DIM
+        )
         self.status_label.pack(side="left", padx=10)
-        self.chrome_status = ctk.CTkLabel(bar, text="● 미연결",
-                                           font=ctk.CTkFont(size=11), text_color=C_TEXT_DIM)
+        self.chrome_status = ctk.CTkLabel(
+            bar, text="● 미연결", font=ctk.CTkFont(size=11), text_color=C_TEXT_DIM
+        )
         self.chrome_status.pack(side="right", padx=10)
 
-    # ─────────────── Empty Label 관리 ───────────────
+    # ─────────────── 키워드 및 태그 관리 ───────────────
+    def _add_keyword(self):
+        kw = self.kw_entry.get().strip()
+        if not kw:
+            return
+        mode = self.mode_var.get()
+
+        if mode == "exclude":
+            if kw not in self.exclude_keywords:
+                self.exclude_keywords.append(kw)
+                logging.info(f"제외 키워드 추가: {kw}")
+        else:
+            if kw not in self.keywords:
+                self.keywords[kw] = {"min": 0, "max": 0, "notify": True, "active": True}
+                logging.info(f"검색 키워드 추가: {kw}")
+
+        self.kw_entry.delete(0, "end")
+        self._refresh_tags()
+
+    def _remove_keyword(self, kw, is_exclude=False):
+        if is_exclude:
+            if kw in self.exclude_keywords:
+                self.exclude_keywords.remove(kw)
+        else:
+            if kw in self.keywords:
+                del self.keywords[kw]
+        self._refresh_tags()
+
+    def _refresh_tags(self):
+        for w in self.tag_frame.winfo_children():
+            w.destroy()
+
+        for kw, conf in self.keywords.items():
+            is_active = conf.get("active", True)
+            bg_color = C_TAG_BG if is_active else "#333333"
+            txt_color = C_TAG_TEXT if is_active else "#555555"
+
+            tag = ctk.CTkFrame(self.tag_frame, fg_color=bg_color, corner_radius=14)
+            tag.pack(side="left", padx=3, pady=3)
+
+            tag.bind("<Button-2>", lambda e, k=kw: self._show_keyword_settings(k))
+            tag.bind("<Button-3>", lambda e, k=kw: self._show_keyword_settings(k))
+
+            lbl = ctk.CTkLabel(
+                tag, text=f" {kw} ", text_color=txt_color, font=ctk.CTkFont(size=12)
+            )
+            lbl.pack(side="left", padx=(8, 0), pady=3)
+            lbl.bind("<Button-2>", lambda e, k=kw: self._show_keyword_settings(k))
+            lbl.bind("<Button-3>", lambda e, k=kw: self._show_keyword_settings(k))
+
+            ctk.CTkButton(
+                tag,
+                text="✕",
+                width=22,
+                height=22,
+                fg_color="transparent",
+                hover_color="#444444",
+                text_color=txt_color,
+                font=ctk.CTkFont(size=10),
+                command=lambda k=kw: self._remove_keyword(k, is_exclude=False),
+                corner_radius=11,
+                border_width=0,
+            ).pack(side="right", padx=(0, 4), pady=3)
+
+        for kw in self.exclude_keywords:
+            tag = ctk.CTkFrame(self.tag_frame, fg_color="#451a1f", corner_radius=14)
+            tag.pack(side="left", padx=3, pady=3)
+            ctk.CTkLabel(
+                tag, text=f" -{kw} ", text_color="#ff8787", font=ctk.CTkFont(size=12)
+            ).pack(side="left", padx=(8, 0), pady=3)
+            ctk.CTkButton(
+                tag,
+                text="✕",
+                width=22,
+                height=22,
+                fg_color="transparent",
+                hover_color="#63252c",
+                text_color="#ff8787",
+                font=ctk.CTkFont(size=10),
+                command=lambda k=kw: self._remove_keyword(k, is_exclude=True),
+                corner_radius=11,
+                border_width=0,
+            ).pack(side="right", padx=(0, 4), pady=3)
+
+    # ★ v5.2: 알림 받기 & 검색 활성화가 추가된 키워드 설정 창
+    def _show_keyword_settings(self, kw):
+        if kw not in self.keywords:
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title(f"키워드 상세 설정")
+        win.geometry("300x380")
+        win.configure(fg_color=C_BG)
+        win.transient(self)
+        win.grab_set()
+
+        ctk.CTkLabel(
+            win,
+            text=f"'{kw}' 상세 설정",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color=C_TEXT,
+        ).pack(pady=(16, 8))
+
+        frame = ctk.CTkFrame(win, fg_color=C_CARD, corner_radius=10)
+        frame.pack(fill="both", expand=True, padx=16, pady=6)
+
+        conf = self.keywords[kw]
+        curr_min = conf.get("min", 0)
+        curr_max = conf.get("max", 0)
+
+        # 가격 필터
+        ctk.CTkLabel(
+            frame,
+            text="최소 가격 (원)",
+            font=ctk.CTkFont(size=12),
+            text_color=C_TEXT_DIM,
+        ).pack(anchor="w", padx=12, pady=(10, 2))
+        min_var = ctk.StringVar(value=str(curr_min) if curr_min > 0 else "")
+        ctk.CTkEntry(
+            frame,
+            textvariable=min_var,
+            placeholder_text="제한 없음 (0)",
+            height=30,
+            fg_color=C_SURFACE,
+            border_color=C_BORDER,
+        ).pack(fill="x", padx=12)
+
+        ctk.CTkLabel(
+            frame,
+            text="최대 가격 (원)",
+            font=ctk.CTkFont(size=12),
+            text_color=C_TEXT_DIM,
+        ).pack(anchor="w", padx=12, pady=(10, 2))
+        max_var = ctk.StringVar(value=str(curr_max) if curr_max > 0 else "")
+        ctk.CTkEntry(
+            frame,
+            textvariable=max_var,
+            placeholder_text="제한 없음 (0)",
+            height=30,
+            fg_color=C_SURFACE,
+            border_color=C_BORDER,
+        ).pack(fill="x", padx=12)
+
+        # 토글 스위치 영역
+        toggle_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        toggle_frame.pack(fill="x", padx=12, pady=(20, 10))
+
+        active_var = ctk.BooleanVar(value=conf.get("active", True))
+        ctk.CTkSwitch(
+            toggle_frame,
+            text="검색 활성화",
+            variable=active_var,
+            font=ctk.CTkFont(size=12),
+        ).pack(anchor="w", pady=(0, 10))
+
+        notify_var = ctk.BooleanVar(value=conf.get("notify", True))
+        ctk.CTkSwitch(
+            toggle_frame,
+            text="새 매물 알림 받기",
+            variable=notify_var,
+            font=ctk.CTkFont(size=12),
+        ).pack(anchor="w")
+
+        def save():
+            try:
+                min_v = int(min_var.get()) if min_var.get().strip() else 0
+                max_v = int(max_var.get()) if max_var.get().strip() else 0
+                self.keywords[kw]["min"] = min_v
+                self.keywords[kw]["max"] = max_v
+                self.keywords[kw]["active"] = active_var.get()
+                self.keywords[kw]["notify"] = notify_var.get()
+                save_json("keywords.json", self.keywords)
+                self._refresh_tags()  # 비활성화 태그 색상 업데이트용
+                win.destroy()
+                self._set_status(f"'{kw}' 설정 저장됨")
+            except ValueError:
+                pass
+
+        ctk.CTkButton(
+            win,
+            text="저장",
+            height=34,
+            fg_color=C_ACCENT,
+            hover_color=C_ACCENT_HOVER,
+            text_color="white",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=save,
+        ).pack(pady=10, padx=16, fill="x")
 
     def _show_empty_label(self):
-        self._destroy_all_scroll_children()
-        lbl = ctk.CTkLabel(
-            self.scroll_frame,
-            text="키워드를 추가하고 모니터링을 시작하세요",
-            font=ctk.CTkFont(size=13), text_color=C_TEXT_DIM)
-        lbl.pack(pady=80)
-
-    def _destroy_all_scroll_children(self):
         for widget in self.scroll_frame.winfo_children():
             try:
                 widget.destroy()
             except Exception:
                 pass
-
-    # ─────────────── 매물 초기화 ───────────────
+        lbl = ctk.CTkLabel(
+            self.scroll_frame,
+            text="키워드를 추가하고 모니터링을 시작하세요",
+            font=ctk.CTkFont(size=13),
+            text_color=C_TEXT_DIM,
+        )
+        lbl.pack(pady=80)
 
     def _clear_all_cards(self):
         self._card_widgets.clear()
@@ -901,8 +1297,7 @@ class MarketMonitorApp(ctk.CTk):
         self._show_empty_label()
         self._set_status("매물 초기화 완료")
 
-    # ─────────────── Chrome 연결 ───────────────
-
+    # ─────────────── Chrome 연결 (★ v5.0 기준 원상 복구) ───────────────
     def _toggle_connection(self):
         if self._chrome_ready:
             self._disconnect_chrome()
@@ -923,13 +1318,31 @@ class MarketMonitorApp(ctk.CTk):
             logged_in = self._check_logged_in()
 
             if logged_in:
-                self.after(0, lambda: self._set_status("기존 로그인 세션 확인! 백그라운드 전환 중…"))
-                self.after(0, lambda: self.chrome_status.configure(
-                    text="● 전환 중…", text_color=C_YELLOW))
+                self.after(
+                    0,
+                    lambda: self._set_status(
+                        "기존 로그인 세션 확인! 백그라운드 전환 중…"
+                    ),
+                )
+                self.after(
+                    0,
+                    lambda: self.chrome_status.configure(
+                        text="● 전환 중…", text_color=C_YELLOW
+                    ),
+                )
             else:
-                self.after(0, lambda: self._set_status("로그인이 필요합니다. 크롬 창에서 로그인해주세요."))
-                self.after(0, lambda: self.chrome_status.configure(
-                    text="● 로그인 대기", text_color=C_YELLOW))
+                self.after(
+                    0,
+                    lambda: self._set_status(
+                        "로그인이 필요합니다. 크롬 창에서 로그인해주세요."
+                    ),
+                )
+                self.after(
+                    0,
+                    lambda: self.chrome_status.configure(
+                        text="● 로그인 대기", text_color=C_YELLOW
+                    ),
+                )
 
                 try:
                     self.chrome_mgr.get(f"{JOONGNA_WEB}/login", timeout=20)
@@ -951,17 +1364,32 @@ class MarketMonitorApp(ctk.CTk):
 
                 if waited >= 120 and not self._check_logged_in():
                     self.after(0, lambda: self._set_status("로그인 시간 초과 (120초)"))
-                    self.after(0, lambda: self.chrome_status.configure(
-                        text="● 로그인 실패", text_color=C_RED_DIM))
+                    self.after(
+                        0,
+                        lambda: self.chrome_status.configure(
+                            text="● 로그인 실패", text_color=C_RED_DIM
+                        ),
+                    )
                     self.chrome_mgr.quit()
                     self._chrome_ready = False
-                    self.after(0, lambda: self.connect_btn.configure(
-                        state="normal", text="로그인"))
+                    self.after(
+                        0,
+                        lambda: self.connect_btn.configure(
+                            state="normal", text="로그인"
+                        ),
+                    )
+                    logging.error("중고나라 로그인 시간 초과")
                     return
 
-            self.after(0, lambda: self._set_status("로그인 확인 완료! 백그라운드로 전환 중…"))
-            self.after(0, lambda: self.chrome_status.configure(
-                text="● 전환 중…", text_color=C_YELLOW))
+            self.after(
+                0, lambda: self._set_status("로그인 확인 완료! 백그라운드로 전환 중…")
+            )
+            self.after(
+                0,
+                lambda: self.chrome_status.configure(
+                    text="● 전환 중…", text_color=C_YELLOW
+                ),
+            )
             time.sleep(1)
 
             self.chrome_mgr.switch_to_headless()
@@ -971,11 +1399,13 @@ class MarketMonitorApp(ctk.CTk):
             self.after(0, self._on_connect_success)
         except Exception as e:
             self._chrome_ready = False
+            logging.error(f"Chrome 연결 에러: {e}")
             self.after(0, lambda: self._on_connect_fail(str(e)))
 
     def _check_logged_in(self):
         try:
-            result = self.chrome_mgr.execute_script("""
+            result = self.chrome_mgr.execute_script(
+                """
                 var body = document.body ? document.body.innerText : '';
                 if (/로그아웃|마이페이지|내\\s*상점|my\\s*page/i.test(body)) {
                     return 'logged_in';
@@ -992,25 +1422,25 @@ class MarketMonitorApp(ctk.CTk):
                     return 'logged_in';
                 }
                 return 'unknown';
-            """)
+            """
+            )
 
-            if result == 'logged_in':
+            if result == "logged_in":
                 return True
-            elif result == 'not_logged_in':
+            elif result == "not_logged_in":
                 return False
 
             cur = self.chrome_mgr.current_url().lower()
             if "login" in cur:
                 return False
-
             return False
-        except Exception as e:
-            print(f"[로그인 확인 오류] {e}")
+        except Exception:
             return False
 
     def _on_connect_success(self):
-        self.connect_btn.configure(state="normal", text="연결 해제",
-                                    fg_color=C_BTN, hover_color=C_BTN_HOVER)
+        self.connect_btn.configure(
+            state="normal", text="연결 해제", fg_color=C_BTN, hover_color=C_BTN_HOVER
+        )
         self.chrome_status.configure(text="● 연결됨", text_color=C_GREEN)
         self._set_status("중고나라 연결 완료 (백그라운드)")
 
@@ -1022,12 +1452,13 @@ class MarketMonitorApp(ctk.CTk):
     def _disconnect_chrome(self):
         self.chrome_mgr.quit()
         self._chrome_ready = False
-        self.connect_btn.configure(text="로그인", fg_color=C_BTN, hover_color=C_BTN_HOVER)
+        self.connect_btn.configure(
+            text="로그인", fg_color=C_BTN, hover_color=C_BTN_HOVER
+        )
         self.chrome_status.configure(text="● 미연결", text_color=C_TEXT_DIM)
         self._set_status("연결 해제됨")
 
     # ─────────────── 모니터링 ───────────────
-
     def _toggle_monitoring(self):
         if self.monitoring:
             self._stop_monitoring()
@@ -1036,21 +1467,25 @@ class MarketMonitorApp(ctk.CTk):
 
     def _start_monitoring(self):
         if not self.keywords:
-            self._set_status("키워드를 먼저 추가하세요")
+            self._set_status("검색 키워드를 먼저 추가하세요")
             return
         self.monitoring = True
-        self.start_btn.configure(text="■  모니터링 중지",
-                                  fg_color="#333333", hover_color="#444444")
+        self.start_btn.configure(
+            text="■  모니터링 중지", fg_color="#333333", hover_color="#444444"
+        )
         self._start_spinner()
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._monitor_thread.start()
+        logging.info("모니터링 시작됨")
 
     def _stop_monitoring(self):
         self.monitoring = False
-        self.start_btn.configure(text="▶  모니터링 시작",
-                                  fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER)
+        self.start_btn.configure(
+            text="▶  모니터링 시작", fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER
+        )
         self._stop_spinner()
         self._set_status("모니터링 중지")
+        logging.info("모니터링 중지됨")
 
     def _monitor_loop(self):
         while self.monitoring:
@@ -1063,28 +1498,50 @@ class MarketMonitorApp(ctk.CTk):
 
     def _do_search(self):
         all_items = []
-        for kw in list(self.keywords):
+
+        for kw, conf in list(self.keywords.items()):
+            # 활성화 토글 체크
+            if not conf.get("active", True):
+                continue
+
             self.after(0, lambda k=kw: self._set_status(f"검색 중: {k}"))
+            raw_items = []
+
             try:
                 bj = BunjangCrawler.search(kw, limit=10)
-                all_items.extend(bj)
-                print(f"[번개장터] '{kw}': {len(bj)}건")
-            except Exception as e:
-                print(f"[번개장터] {e}")
+                raw_items.extend(bj)
+            except Exception:
+                pass
 
             if self._chrome_ready:
                 try:
                     jn = self.joongna_crawler.search(kw, limit=10)
-                    all_items.extend(jn)
-                    print(f"[중고나라] '{kw}': {len(jn)}건")
-                    if jn:
-                        print(f"  첫 결과: {jn[0]}")
-                except Exception as e:
-                    print(f"[중고나라] {e}")
-                    if not self.chrome_mgr.is_alive:
-                        self._chrome_ready = False
-                        self.after(0, lambda: self.chrome_status.configure(
-                            text="● 연결 끊김", text_color=C_RED_DIM))
+                    raw_items.extend(jn)
+                except Exception:
+                    pass
+
+            min_price = conf.get("min", 0)
+            max_price = conf.get("max", 0)
+            notify_enabled = conf.get("notify", True)
+
+            for item in raw_items:
+                title_lower = item["title"].lower()
+
+                # 1. 제외 키워드 필터
+                if any(excl.lower() in title_lower for excl in self.exclude_keywords):
+                    continue
+
+                # 2. 가격 필터
+                price_val = parse_price_value(item["price"])
+                if price_val != -1:
+                    if min_price > 0 and price_val < min_price:
+                        continue
+                    if max_price > 0 and price_val > max_price:
+                        continue
+
+                # 임시로 키워드 매핑 정보 저장 (알림 팝업 용도)
+                item["_notify_target"] = notify_enabled
+                all_items.append(item)
             time.sleep(0.5)
 
         is_first = len(self._seen_ids) == 0
@@ -1096,17 +1553,34 @@ class MarketMonitorApp(ctk.CTk):
 
         now = datetime.now().strftime("%H:%M:%S")
         if new_items:
-            self.after(0, lambda items=new_items, first=is_first:
-                       self._display_new_items(items, animate=not first))
-            self.after(0, lambda: self._set_status(
-                f"{len(new_items)}개 새 상품  ({now})"))
+            self.after(
+                0,
+                lambda items=new_items, first=is_first: self._display_new_items(
+                    items, animate=not first
+                ),
+            )
+            self.after(
+                0, lambda: self._set_status(f"{len(new_items)}개 새 상품  ({now})")
+            )
+
+            # ★ 첫 로드가 아니면 알림 팝업 트리거
+            if not is_first:
+                for item in new_items:
+                    if item.get("_notify_target", True):
+                        self.after(0, lambda it=item: self._trigger_toast(it))
         else:
             self.after(0, lambda: self._set_status(f"새 상품 없음  ({now})"))
 
-    # ────────────────────────────────────────────
-    #  카드 표시
-    # ────────────────────────────────────────────
+    def _trigger_toast(self, item):
+        # 죽은 토스트 정리
+        self._active_toasts = [t for t in self._active_toasts if t.winfo_exists()]
+        idx = len(self._active_toasts)
+        t = ToastNotification(self, item, idx)
+        self._active_toasts.append(t)
 
+    # ────────────────────────────────────────────
+    #  UI 표시 및 기타 기능
+    # ────────────────────────────────────────────
     def _display_new_items(self, items, animate=True):
         existing_card_set = set(id(c) for c in self._card_widgets)
         for child in self.scroll_frame.winfo_children():
@@ -1157,86 +1631,108 @@ class MarketMonitorApp(ctk.CTk):
 
     def _create_card(self, item):
         card = ctk.CTkFrame(
-            self.scroll_frame, fg_color=C_CARD,
-            corner_radius=10, height=self.CARD_HEIGHT)
+            self.scroll_frame,
+            fg_color=C_CARD,
+            corner_radius=10,
+            height=self.CARD_HEIGHT,
+        )
         card.pack_propagate(False)
 
-        # ★ v5.0: 이미지 — CTkLabel로 corner_radius 적용, 패딩으로 여유 확보
         sz = self.CARD_IMG_SIZE
         img_label = ctk.CTkLabel(
-            card, text="", width=sz, height=sz,
-            fg_color=C_SURFACE,
-            corner_radius=0)    
-        img_label.pack(side="left", padx=(8, 0), pady=8)  # ★ 여유 패딩
+            card, text="", width=sz, height=sz, fg_color=C_SURFACE, corner_radius=0
+        )
+        img_label.pack(side="left", padx=(8, 0), pady=8)
 
         if item.get("image"):
-            threading.Thread(target=self._load_image,
-                             args=(item["image"], img_label, sz), daemon=True).start()
+            threading.Thread(
+                target=self._load_image,
+                args=(item["image"], img_label, sz),
+                daemon=True,
+            ).start()
 
-        # ── 하트 (오른쪽 끝) ──
         is_fav = any(f.get("id") == item["id"] for f in self.favorites)
         heart_btn = ctk.CTkButton(
             card,
             text="♥" if is_fav else "♡",
-            width=30, height=30,
-            fg_color="transparent", hover_color=C_BTN_HOVER,
+            width=30,
+            height=30,
+            fg_color="transparent",
+            hover_color=C_BTN_HOVER,
             text_color=C_ACCENT if is_fav else C_TEXT_DIM,
             font=ctk.CTkFont(size=16),
             command=None,
-            corner_radius=6, border_width=0)
+            corner_radius=6,
+            border_width=0,
+        )
         heart_btn.pack(side="right", padx=(0, self.CARD_PAD_X), pady=self.CARD_PAD_Y)
 
-        # ── 텍스트 영역 ──
         text_frame = ctk.CTkFrame(card, fg_color="transparent")
-        text_frame.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=(2, 6))
+        text_frame.pack(
+            side="left", fill="both", expand=True, padx=(10, 0), pady=(2, 6)
+        )
 
-        # 출처 + 시간
         top_row = ctk.CTkFrame(text_frame, fg_color="transparent")
         top_row.pack(anchor="w", fill="x")
 
         source_color = C_ACCENT if item["source"] == "번개장터" else C_JOONGNA
-        ctk.CTkLabel(top_row, text=item["source"],
-                     font=ctk.CTkFont(size=11, weight="bold"),
-                     text_color=source_color).pack(side="left")
+        ctk.CTkLabel(
+            top_row,
+            text=item["source"],
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=source_color,
+        ).pack(side="left")
         time_text = item.get("time", "")
         if time_text:
-            ctk.CTkLabel(top_row, text=f"  ·  {time_text}",
-                         font=ctk.CTkFont(size=11),
-                         text_color=C_TEXT_DIM).pack(side="left")
+            ctk.CTkLabel(
+                top_row,
+                text=f"  ·  {time_text}",
+                font=ctk.CTkFont(size=11),
+                text_color=C_TEXT_DIM,
+            ).pack(side="left")
 
-        # 제목
         title_text = item.get("title", "").strip() or "(제목 없음)"
         if len(title_text) > 35:
             title_text = title_text[:35] + "…"
-        ctk.CTkLabel(text_frame, text=title_text,
-                     font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=C_TEXT, anchor="w").pack(anchor="w", pady=(1, 0))
+        ctk.CTkLabel(
+            text_frame,
+            text=title_text,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=C_TEXT,
+            anchor="w",
+        ).pack(anchor="w", pady=(1, 0))
 
-        # 가격
         price_text = item.get("price", "").strip()
         if price_text:
-            ctk.CTkLabel(text_frame, text=price_text,
-                         font=ctk.CTkFont(size=14, weight="bold"),
-                         text_color=C_PRICE, anchor="w").pack(anchor="w", pady=(1, 0))
+            ctk.CTkLabel(
+                text_frame,
+                text=price_text,
+                font=ctk.CTkFont(size=14, weight="bold"),
+                text_color=C_PRICE,
+                anchor="w",
+            ).pack(anchor="w", pady=(1, 0))
         else:
-            ctk.CTkLabel(text_frame, text="가격 정보 없음",
-                         font=ctk.CTkFont(size=10),
-                         text_color=C_TEXT_DIM, anchor="w").pack(anchor="w", pady=(1, 0))
+            ctk.CTkLabel(
+                text_frame,
+                text="가격 정보 없음",
+                font=ctk.CTkFont(size=10),
+                text_color=C_TEXT_DIM,
+                anchor="w",
+            ).pack(anchor="w", pady=(1, 0))
 
-        # ── 매핑 + 커맨드 ──
         heart_btn.configure(command=lambda c=card, i=item: self._toggle_favorite(c, i))
         self._card_heart_btns[id(card)] = heart_btn
         self._card_items[id(card)] = item
 
-        # ── 카드 클릭 → URL ──
         url = item.get("url", "")
         if url:
-            self._bind_recursive(card, "<Button-1>",
-                                  lambda e, u=url: webbrowser.open(u),
-                                  exclude=heart_btn)
+            self._bind_recursive(
+                card,
+                "<Button-1>",
+                lambda e, u=url: webbrowser.open(u),
+                exclude=heart_btn,
+            )
         return card
-
-    # ─────────────── 공용 ───────────────
 
     def _bind_recursive(self, widget, event, callback, exclude=None):
         if widget is exclude:
@@ -1246,10 +1742,6 @@ class MarketMonitorApp(ctk.CTk):
             self._bind_recursive(child, event, callback, exclude=exclude)
 
     def _load_image(self, url, label, size=66):
-        """
-        ★ v5.0: 이미지를 center-crop → 정사각형 리사이즈만 수행.
-        PIL 라운드 마스크 적용 안 함. CTkLabel의 corner_radius가 클리핑 처리.
-        """
         try:
             if url in self._image_cache:
                 photo = self._image_cache[url]
@@ -1258,25 +1750,18 @@ class MarketMonitorApp(ctk.CTk):
                 if resp.status_code != 200:
                     return
                 img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-
-                # center-crop → 정사각형
                 w, h = img.size
                 short = min(w, h)
                 left = (w - short) // 2
-                top  = (h - short) // 2
-                img = img.crop((left, top, left + short, top + short))
-                img = img.resize((size, size), Image.LANCZOS)
-
-                # ★ PIL 라운드 마스크 제거 — CTkLabel corner_radius가 처리
-                photo = ctk.CTkImage(light_image=img, dark_image=img,
-                                     size=(size, size))
+                top = (h - short) // 2
+                img = img.crop((left, top, left + short, top + short)).resize(
+                    (size, size), Image.LANCZOS
+                )
+                photo = ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
                 self._image_cache[url] = photo
-
             self.after(0, lambda: label.configure(image=photo, text=""))
-        except Exception as e:
-            print(f"[이미지] {e}")
-
-    # ─────────────── 즐겨찾기 ───────────────
+        except Exception:
+            pass
 
     def _toggle_favorite(self, card, item):
         item_id = item["id"]
@@ -1294,7 +1779,6 @@ class MarketMonitorApp(ctk.CTk):
             if heart_btn:
                 heart_btn.configure(text="♥", text_color=C_ACCENT)
             self._set_status(f"즐겨찾기 추가: {item.get('title','')[:20]}")
-
         save_json(FAVORITES_FILE, self.favorites)
 
     def _show_favorites(self):
@@ -1307,18 +1791,27 @@ class MarketMonitorApp(ctk.CTk):
 
         header_row = ctk.CTkFrame(win, fg_color="transparent")
         header_row.pack(fill="x", padx=16, pady=(12, 4))
-        ctk.CTkLabel(header_row, text="♥ 즐겨찾기",
-                     font=ctk.CTkFont(size=16, weight="bold"),
-                     text_color=C_TEXT).pack(side="left")
-        count_label = ctk.CTkLabel(header_row, text=f"{len(self.favorites)}개",
-                     font=ctk.CTkFont(size=12),
-                     text_color=C_TEXT_DIM)
+        ctk.CTkLabel(
+            header_row,
+            text="♥ 즐겨찾기",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=C_TEXT,
+        ).pack(side="left")
+        count_label = ctk.CTkLabel(
+            header_row,
+            text=f"{len(self.favorites)}개",
+            font=ctk.CTkFont(size=12),
+            text_color=C_TEXT_DIM,
+        )
         count_label.pack(side="right")
 
         if not self.favorites:
-            ctk.CTkLabel(win, text="즐겨찾기가 비어있습니다",
-                         font=ctk.CTkFont(size=13),
-                         text_color=C_TEXT_DIM).pack(pady=40)
+            ctk.CTkLabel(
+                win,
+                text="즐겨찾기가 비어있습니다",
+                font=ctk.CTkFont(size=13),
+                text_color=C_TEXT_DIM,
+            ).pack(pady=40)
             return
 
         sf = ctk.CTkScrollableFrame(win, fg_color=C_BG)
@@ -1328,57 +1821,77 @@ class MarketMonitorApp(ctk.CTk):
             for w in sf.winfo_children():
                 w.destroy()
             if not self.favorites:
-                ctk.CTkLabel(sf, text="즐겨찾기가 비어있습니다",
-                             font=ctk.CTkFont(size=13),
-                             text_color=C_TEXT_DIM).pack(pady=40)
+                ctk.CTkLabel(
+                    sf,
+                    text="즐겨찾기가 비어있습니다",
+                    font=ctk.CTkFont(size=13),
+                    text_color=C_TEXT_DIM,
+                ).pack(pady=40)
                 count_label.configure(text=f"{len(self.favorites)}개")
                 return
-
             for item in list(self.favorites):
-                row = ctk.CTkFrame(sf, fg_color=C_CARD, corner_radius=8,
-                                   height=52)
+                row = ctk.CTkFrame(sf, fg_color=C_CARD, corner_radius=8, height=52)
                 row.pack(fill="x", pady=2, padx=2)
                 row.pack_propagate(False)
-
-                source_color = C_ACCENT if item.get("source") == "번개장터" else C_JOONGNA
-                ctk.CTkLabel(row, text=item.get("source", ""),
-                             font=ctk.CTkFont(size=10, weight="bold"),
-                             text_color=source_color).pack(side="left", padx=(10, 6), pady=8)
-
+                source_color = (
+                    C_ACCENT if item.get("source") == "번개장터" else C_JOONGNA
+                )
+                ctk.CTkLabel(
+                    row,
+                    text=item.get("source", ""),
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color=source_color,
+                ).pack(side="left", padx=(10, 6), pady=8)
                 info_frame = ctk.CTkFrame(row, fg_color="transparent")
                 info_frame.pack(side="left", fill="both", expand=True, pady=4)
-
                 title = (item.get("title", ""))[:24]
-                ctk.CTkLabel(info_frame, text=title,
-                             font=ctk.CTkFont(size=11, weight="bold"),
-                             text_color=C_TEXT, anchor="w").pack(anchor="w")
-
+                ctk.CTkLabel(
+                    info_frame,
+                    text=title,
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color=C_TEXT,
+                    anchor="w",
+                ).pack(anchor="w")
                 price = item.get("price", "")
                 if price:
-                    ctk.CTkLabel(info_frame, text=price,
-                                 font=ctk.CTkFont(size=11, weight="bold"),
-                                 text_color=C_PRICE, anchor="w").pack(anchor="w")
-
+                    ctk.CTkLabel(
+                        info_frame,
+                        text=price,
+                        font=ctk.CTkFont(size=11, weight="bold"),
+                        text_color=C_PRICE,
+                        anchor="w",
+                    ).pack(anchor="w")
                 ctk.CTkButton(
-                    row, text="✕", width=26, height=26,
-                    fg_color="transparent", hover_color="#3a2020",
-                    text_color=C_RED_DIM, font=ctk.CTkFont(size=12),
+                    row,
+                    text="✕",
+                    width=26,
+                    height=26,
+                    fg_color="transparent",
+                    hover_color="#3a2020",
+                    text_color=C_RED_DIM,
+                    font=ctk.CTkFont(size=12),
                     command=lambda i=item: _remove_fav(i),
-                    corner_radius=6, border_width=0
+                    corner_radius=6,
+                    border_width=0,
                 ).pack(side="right", padx=(0, 6), pady=6)
-
                 ctk.CTkButton(
-                    row, text="→", width=26, height=26,
-                    fg_color="transparent", hover_color=C_BTN_HOVER,
+                    row,
+                    text="→",
+                    width=26,
+                    height=26,
+                    fg_color="transparent",
+                    hover_color=C_BTN_HOVER,
                     text_color=C_TEXT_DIM,
                     command=lambda u=item.get("url", ""): webbrowser.open(u),
-                    corner_radius=6, border_width=0
+                    corner_radius=6,
+                    border_width=0,
                 ).pack(side="right", padx=(0, 2), pady=6)
-
             count_label.configure(text=f"{len(self.favorites)}개")
 
         def _remove_fav(item):
-            self.favorites = [f for f in self.favorites if f.get("id") != item.get("id")]
+            self.favorites = [
+                f for f in self.favorites if f.get("id") != item.get("id")
+            ]
             save_json(FAVORITES_FILE, self.favorites)
             for cid, citem in self._card_items.items():
                 if citem.get("id") == item.get("id"):
@@ -1392,8 +1905,6 @@ class MarketMonitorApp(ctk.CTk):
 
         _rebuild_fav_list()
 
-    # ─────────────── 설정 ───────────────
-
     def _show_settings(self):
         win = ctk.CTkToplevel(self)
         win.title("설정")
@@ -1402,20 +1913,31 @@ class MarketMonitorApp(ctk.CTk):
         win.transient(self)
         win.grab_set()
 
-        ctk.CTkLabel(win, text="설정",
-                     font=ctk.CTkFont(size=16, weight="bold"),
-                     text_color=C_TEXT).pack(pady=12)
-
+        ctk.CTkLabel(
+            win,
+            text="설정",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=C_TEXT,
+        ).pack(pady=12)
         frame = ctk.CTkFrame(win, fg_color=C_CARD, corner_radius=10)
         frame.pack(fill="x", padx=16, pady=6)
-        ctk.CTkLabel(frame, text="새로고침 간격 (초)",
-                     font=ctk.CTkFont(size=12),
-                     text_color=C_TEXT_DIM).pack(anchor="w", padx=12, pady=(10, 4))
+        ctk.CTkLabel(
+            frame,
+            text="새로고침 간격 (초)",
+            font=ctk.CTkFont(size=12),
+            text_color=C_TEXT_DIM,
+        ).pack(anchor="w", padx=12, pady=(10, 4))
         interval_var = ctk.StringVar(value=str(self.settings.get("interval", 30)))
-        ctk.CTkEntry(frame, textvariable=interval_var, height=34,
-                     fg_color=C_SURFACE, border_color=C_BORDER,
-                     text_color=C_TEXT, border_width=1,
-                     corner_radius=6).pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkEntry(
+            frame,
+            textvariable=interval_var,
+            height=34,
+            fg_color=C_SURFACE,
+            border_color=C_BORDER,
+            text_color=C_TEXT,
+            border_width=1,
+            corner_radius=6,
+        ).pack(fill="x", padx=12, pady=(0, 10))
 
         def save():
             try:
@@ -1426,13 +1948,18 @@ class MarketMonitorApp(ctk.CTk):
             except ValueError:
                 pass
 
-        ctk.CTkButton(win, text="저장", height=34,
-                      fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER,
-                      text_color="white",
-                      font=ctk.CTkFont(size=13, weight="bold"),
-                      command=save, corner_radius=6, border_width=0).pack(pady=10)
-
-    # ─────────────── 스피너 ───────────────
+        ctk.CTkButton(
+            win,
+            text="저장",
+            height=34,
+            fg_color=C_ACCENT,
+            hover_color=C_ACCENT_HOVER,
+            text_color="white",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=save,
+            corner_radius=6,
+            border_width=0,
+        ).pack(pady=10)
 
     def _start_spinner(self):
         self._spinner_running = True
@@ -1457,10 +1984,13 @@ class MarketMonitorApp(ctk.CTk):
         self.status_label.configure(text=text)
 
     def _on_close(self):
+        logging.info("HAMON 앱 종료 중...")
         self.monitoring = False
         self._spinner_running = False
         save_json(FAVORITES_FILE, self.favorites)
         save_json(SETTINGS_FILE, self.settings)
+        save_json("keywords.json", self.keywords)
+        save_json("excludes.json", self.exclude_keywords)
         try:
             self.chrome_mgr.quit()
         except Exception:
