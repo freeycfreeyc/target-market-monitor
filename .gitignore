@@ -18,6 +18,13 @@ chrome_profile/
 # 개인 데이터 (선택)
 favorites.json
 settings.json
+keywords.json
+
+# 로그 파일
+*.log
+
+# 크롬 프로필 (이건 특히 중요)
+chrome_profile/
 
 # macOS
 .DS_Store
